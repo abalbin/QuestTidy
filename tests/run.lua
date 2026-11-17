@@ -14,7 +14,8 @@ end
 local function setup(options)
 	options = options or {}
 	local state = { frames = {}, messages = {}, menus = {}, watches = {}, removed = {}, failed = {}, rows = {}, focus = 0,
-		quests = {}, objectives = {}, ready = {}, added = {}, bagItems = {}, onQuest = {}, completed = {}, deleteCalls = {} }
+		quests = {}, objectives = {}, ready = {}, added = {}, bagItems = {}, onQuest = {}, completed = {}, deleteCalls = {},
+		maps = {}, destinations = {}, openBags = {}, bagButtons = {} }
 	local methods = {}
 	local function region(parent, name)
 		local value = setmetatable({ parent = parent, name = name, scripts = {}, events = {}, points = {}, shown = true, enabled = true }, { __index = methods })
@@ -58,6 +59,10 @@ local function setup(options)
 	function methods:CreateFontString(name) return region(self, name) end
 	function methods:CreateTexture(name) return region(self, name) end
 	function methods:SetTexture(texture) self.texture = texture end
+	function methods:GetFrameLevel() return self.frameLevel or 1 end
+	function methods:GetFrameStrata() return self.frameStrata or "MEDIUM" end
+	function methods:LockHighlight() self.highlightLocked = true end
+	function methods:UnlockHighlight() self.highlightLocked = false end
 	function methods:SetHyperlink(link) self.hyperlink = link end
 	function methods:SetParent(parent) self.parent = parent end
 	function methods:GetParent() return self.parent end
@@ -213,7 +218,15 @@ local function setup(options)
 		state.lastMenu = generateMenu(owner, callback)
 		return {}
 	end }
-	env.Enum = { BagIndex = { Backpack = 0, ReagentBag = 5 }, ItemClass = { Questitem = 12 } }
+	env.Enum = { BagIndex = { Backpack = 0, ReagentBag = 5 }, ItemClass = { Questitem = 12 }, UIMapType = { Zone = 3 } }
+	env.C_Map = {
+		GetBestMapForUnit = function(unit) equal(unit, "player", "map unit"); return state.playerMap end,
+		GetMapInfo = function(id) return state.maps[id] end,
+	}
+	env.GetQuestUiMapID = function(id, ignoreWaypoints)
+		equal(ignoreWaypoints, true, "use the client destination rather than a travel waypoint")
+		return state.destinations[id]
+	end
 	env.ItemLocation = { CreateFromBagAndSlot = function(_, bag, slot) return { bag = bag, slot = slot } end }
 	env.GetCursorInfo = function() if state.cursor then return unpack(state.cursor) end end
 	env.StaticPopupDialogs = {}
@@ -225,6 +238,22 @@ local function setup(options)
 	env.StaticPopup_Visible = function(name) return state.popup and state.popup.name == name end
 	env.YES, env.NO, env.DELETE, env.CANCEL = "Yes", "No", "Delete", "Cancel"
 	local function bagItem(bag, slot) return (state.bagItems[bag] or {})[slot] end
+	env.OpenBag = function(bag)
+		state.openBags[#state.openBags + 1] = bag
+	end
+	env.ContainerFrameUtil_GetItemButtonAndContainer = function(bag, slot)
+		local button = (state.bagButtons[bag] or {})[slot]
+		if button then return button, button:GetParent() end
+	end
+	function state:bagButton(bag, slot, container)
+		local button = region(container or env.UIParent)
+		button.bag, button.slot = bag, slot
+		function button:GetBagID() return self.bag end
+		function button:GetID() return self.slot end
+		self.bagButtons[bag] = self.bagButtons[bag] or {}
+		self.bagButtons[bag][slot] = button
+		return button
+	end
 	env.C_Container = {
 		GetContainerNumSlots = function(bag)
 			assert(bag >= 0 and bag <= 5, "scan accessed bank or keyring")
@@ -272,10 +301,13 @@ local function setup(options)
 	end
 	state.combat = options.combat
 	local ns = {}
-	for _, file in ipairs({ "Notes.lua", "BagReview.lua", "QuestTidy.lua" }) do
-		local chunk = assert(loadfile(addonPath .. "/" .. file))
-		setfenv(chunk, env)
-		chunk("QuestTidy", ns)
+	for line in io.lines(addonPath .. "/QuestTidy.toc") do
+		local file = line:match("^%s*(.+%.lua)%s*$")
+		if file then
+			local chunk = assert(loadfile(addonPath .. "/" .. file))
+			setfenv(chunk, env)
+			chunk("QuestTidy", ns)
+		end
 	end
 	function state:event(event, ...)
 		local count = #self.frames
@@ -293,6 +325,16 @@ local function setup(options)
 	function state:button(label)
 		for _, frame in ipairs(self.frames) do if frame.text == label then return frame end end
 		error("Missing button " .. label)
+	end
+	function state:visibleText(label)
+		for _, frame in ipairs(self.frames) do
+			if frame.text == label and frame:IsVisible() then return frame end
+		end
+	end
+	function state:click(label)
+		local button = assert(self:visibleText(label), "Missing visible button " .. label)
+		assert(button:IsEnabled(), label .. " is disabled")
+		button.scripts.OnClick(button)
 	end
 	function state:menu(owner, tag)
 		return generateMenu(owner, assert(self.menus[tag or "MENU_QUEST_MAP_LOG_TITLE"], "native menu not registered"))
@@ -617,6 +659,146 @@ test("bag review puts quest items first and shows their inventory icons", functi
 	assert(textures[134015], "inventory icon is displayed")
 	assert(textures[134017], "item API icon is displayed when inventory icon is missing")
 	assert(not textures[134016], "inventory icon takes precedence")
+end)
+
+local function setupZones(s)
+	s.maps = {
+		[10] = { mapID = 10, name = "Kalimdor", mapType = 2, parentMapID = 0 },
+		[20] = { mapID = 20, name = "Desolace", mapType = 3, parentMapID = 10 },
+		[21] = { mapID = 21, name = "The Veiled Sea", mapType = 5, parentMapID = 20 },
+		[30] = { mapID = 30, name = "Feralas", mapType = 3, parentMapID = 10 },
+	}
+	s.playerMap = 21
+end
+
+local function putNamedItem(s, bag, slot, label, questID, itemID)
+	itemID = itemID or (1000 + bag * 100 + slot)
+	return putItem(s, bag, slot, { itemID = itemID, hyperlink = "|Hitem:" .. itemID .. "|h[" .. label .. "]|h",
+		questInfo = { isQuestItem = true, isActive = false, questID = questID } })
+end
+
+test("zone controls show local, other and unresolved destinations correctly", function()
+	local s = setup()
+	setupZones(s)
+	s.destinations = { [71] = 20, [72] = 30, [73] = 10 }
+	putNamedItem(s, 0, 1, "Local item", 71)
+	putNamedItem(s, 0, 2, "Other item", 72)
+	putNamedItem(s, 0, 3, "Continent item", 73)
+	putNamedItem(s, 0, 4, "Unknown item")
+	assert(s.ns.ReviewQuestItems())
+	for _, label in ipairs({ "Local item", "Other item", "Continent item", "Unknown item" }) do
+		assert(s:visibleText(label), label .. " is visible in All items")
+	end
+	s:click("Current zone")
+	assert(s:visibleText("Local item"), "player submap resolves to the quest zone")
+	assert(not s:visibleText("Other item") and not s:visibleText("Unknown item"))
+	s:click("Other zones")
+	assert(s:visibleText("Other item"))
+	assert(not s:visibleText("Local item") and not s:visibleText("Continent item") and not s:visibleText("Unknown item"))
+	assert(s:visibleText("Protected"), "known starter remains protected in the filtered view")
+	s.playerMap = 30
+	s:event("ZONE_CHANGED_NEW_AREA")
+	assert(s:visibleText("Local item") and not s:visibleText("Other item"), "other view follows current player zone")
+	s.destinations[71] = 30
+	s:event("QUEST_POI_UPDATE")
+	assert(not s:visibleText("Local item"), "updated destination removes row from the other-zone view")
+	s.playerMap = 10
+	s:event("ZONE_CHANGED")
+	assert(not s:visibleText("Local item") and not s:visibleText("Other item"), "no known player zone yields no matches")
+	s:click("All items")
+	assert(s:visibleText("Unknown item"), "unknown item remains discoverable")
+end)
+
+test("multiple proven quest uses prefer a current zone and retain unknowns under All items", function()
+	local s = setup()
+	setupZones(s)
+	s.quests = { { questID = 81 }, { questID = 82 } }
+	s.onQuest = { [81] = true, [82] = true }
+	s.objectives = {
+		[81] = { { type = "item", text = "Shared item: 1/2" } },
+		[82] = { { type = "item", text = "1/2 |Hitem:1001|h[Shared item]|h" } },
+	}
+	s.destinations = { [81] = 20, [82] = 30 }
+	putNamedItem(s, 0, 1, "Shared item")
+	assert(s.ns.ReviewQuestItems())
+	s:click("Current zone")
+	assert(s:visibleText("Shared item"), "the local name match is retained alongside the remote ID match")
+	s:click("Other zones")
+	assert(not s:visibleText("Shared item"), "a shared current-zone stack is omitted from other zones")
+	s.destinations[81] = nil
+	s:event("QUEST_POI_UPDATE")
+	assert(not s:visibleText("Shared item"), "an unresolved association prevents an other-zone claim")
+	s:click("All items")
+	assert(s:visibleText("Shared item") and s:visibleText("Protected"))
+end)
+
+local function findAction(s, label)
+	local row = assert(s:visibleText(label), "item row is visible"):GetParent()
+	for _, frame in ipairs(s.frames) do
+		if frame:GetParent() == row and frame.text == "Find in bags" then
+			assert(frame:IsEnabled(), "find action is enabled")
+			return function() frame.scripts.OnClick(frame) end
+		end
+	end
+	error("Missing Find in bags for " .. label)
+end
+
+test("find opens and highlights the exact moved stack without changing the bags", function()
+	local s = setup()
+	local target = putNamedItem(s, 0, 1, "Identical supplies", nil, 1200)
+	local duplicate = putNamedItem(s, 0, 2, "Identical supplies", nil, 1200)
+	local wrongSlot = s:bagButton(0, 1)
+	local container = wrongSlot:GetParent()
+	local targetSlot = s:bagButton(3, 2, container)
+	assert(s.ns.ReviewQuestItems())
+	local find = findAction(s, "Identical supplies")
+	s.bagItems[0][1], s.bagItems[0][2] = duplicate, nil
+	s.bagItems[3] = { [2] = target }
+	find()
+	equal(#s.openBags, 1, "only the destination bag opens")
+	equal(s.openBags[1], 3, "current bag for the selected stack")
+	local indicator = assert(s.env.QuestTidyBagItemHighlight, "the native slot has a visible indicator")
+	equal(indicator:GetParent(), targetSlot, "indicator belongs to the exact stack")
+	assert(indicator:IsVisible() and not s.env.QuestTidyBagReview:IsShown(), "the review clears the highlighted bag")
+	equal(s.bagItems[0][1], duplicate, "identical stack unchanged")
+	equal(s.bagItems[3][2], target, "target stack unchanged")
+	equal(#s.deleteCalls, 0, "finding never deletes")
+	targetSlot.slot = 1
+	indicator.scripts.OnUpdate(indicator, 0.1)
+	assert(not indicator:IsShown(), "reassigned native slot stops highlighting")
+end)
+
+test("find never opens a replacement stack when the selected GUID has disappeared", function()
+	local s = setup()
+	putNamedItem(s, 0, 1, "Original supplies", nil, 1200)
+	s:bagButton(0, 1)
+	assert(s.ns.ReviewQuestItems())
+	local find = findAction(s, "Original supplies")
+	local replacement = putNamedItem(s, 0, 1, "Original supplies", nil, 1200)
+	replacement.guid = "Replacement-GUID"
+	find()
+	equal(#s.openBags, 0, "no bag opened for a replacement")
+	assert(s.env.QuestTidyBagReview:IsShown(), "review remains visible after a failed find")
+	assert(not s.env.QuestTidyBagItemHighlight or not s.env.QuestTidyBagItemHighlight:IsShown())
+end)
+
+test("find clears its outline on timeout and retains the selected zone view", function()
+	local s = setup()
+	setupZones(s)
+	s.destinations[71] = 20
+	putNamedItem(s, 2, 1, "Local supplies", 71)
+	putNamedItem(s, 2, 2, "Unknown supplies")
+	local slot = s:bagButton(2, 1)
+	assert(s.ns.ReviewQuestItems())
+	s:click("Current zone")
+	findAction(s, "Local supplies")()
+	local indicator = s.env.QuestTidyBagItemHighlight
+	equal(indicator:GetParent(), slot, "outline is on the original stack")
+	assert(indicator:IsShown())
+	indicator.scripts.OnUpdate(indicator, 10)
+	assert(not indicator:IsShown(), "outline is temporary")
+	assert(s.ns.ReviewQuestItems())
+	assert(s:visibleText("Local supplies") and not s:visibleText("Unknown supplies"), "filter is retained")
 end)
 
 test("all quest starters remain protected including completed ones", function()

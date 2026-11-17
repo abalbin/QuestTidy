@@ -42,6 +42,10 @@ Open a bag's portrait or settings menu and choose **Review quest items**, or run
 
 The list puts items the client flags or classifies as quest items first. Other items linked to quests appear in a separate section. Hover an item icon to see its tooltip.
 
+Use **All items**, **Current zone**, or **Other zones** to filter the review by the associated quest's in-game destination. Items whose destination is unavailable appear under **All items**. Changing views leaves each stack's deletion protections in place.
+
+Choose **Find in bags** to open the native bag and briefly outline the exact stack. The review closes so you can see the bag. Reopen the review to return to the same filter.
+
 QuestTidy checks both bag metadata and item objectives in the quest log. A match can show the active quest's name and protects the item through turn-in. Quest starters are also protected, including starters whose quest was completed before, because they may be repeatable or useful later. Scorpashi Venom and Aged Kodo Hide also have a verified ID match for [Reagents for Reclaimers Inc.](https://www.wowhead.com/forever/quest=1459/reagents-for-reclaimers-inc).
 
 The **Use unknown** label means an item may still be needed for an active, future, repeatable, or shared quest. The client exposes limited quest associations, and ordinary items used by quests may be absent from the review. If you see **Quest check incomplete**, expand your quest log and refresh the bag review before attempting deletion.

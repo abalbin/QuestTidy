@@ -29,4 +29,11 @@ These checks use the delivered addon code with client API test doubles. They do 
 15. Repeat with missing item data or a locked item. Confirm the addon offers no deletion until complete, current data is available and the item is unlocked.
 16. Check Escape, dragging, scrolling, your UI scale, and other installed bag or quest addons.
 
+## Check the zone filter and stack finder in Forever
+
+1. Carry quest items with known destinations in two zones and an item whose use is unknown. Open `/qt bags`. Confirm **All items** shows every review row, **Current zone** shows local destinations, and **Other zones** shows known destinations elsewhere. The unknown item should appear only under **All items**.
+2. Cross into the other zone with the review open. Confirm both filtered views update and active quest items and quest starters still show **Protected**.
+3. With two stacks of the same item, choose **Find in bags** on one row. Confirm only the selected stack is outlined and both stacks stay in place. Repeat with combined bags and separate bags.
+4. Close the bag or move the located stack before the outline fades. Confirm it clears without highlighting a different item. Reopen the review and check that your filter is still selected.
+
 Use a disposable item for destructive checks. If a check fails, use the [bug report form](https://github.com/abalbin/QuestTidy/issues/new?template=bug_report.yml).
