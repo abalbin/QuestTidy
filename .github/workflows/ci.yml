@@ -14,6 +14,8 @@ jobs:
     name: Test and package
     if: github.event_name != 'push' || !github.event.deleted
     runs-on: ubuntu-24.04
+    outputs:
+      commit: ${{ steps.build.outputs.commit }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -23,6 +25,7 @@ jobs:
       - name: Run Lua checks
         run: luajit tests/run.lua
       - name: Build installable ZIP
+        id: build
         shell: bash
         run: |
           args=(--output-dir dist)
@@ -30,6 +33,7 @@ jobs:
             args+=(--tag "$GITHUB_REF_NAME")
           fi
           python3 scripts/package.py "${args[@]}"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Upload installable ZIP
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -58,6 +62,7 @@ jobs:
         env:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
+          BUILD_COMMIT: ${{ needs.build.outputs.commit }}
         shell: bash
         run: |
           tag="$GITHUB_REF_NAME"
@@ -65,6 +70,16 @@ jobs:
           zip="dist/$asset"
           test -f "$zip"
 
+          verify_tag() {
+            local tag_commit
+            tag_commit=$(gh api "repos/$GH_REPO/commits/$tag" --jq .sha)
+            if [[ "$tag_commit" != "$BUILD_COMMIT" ]]; then
+              echo "Tag $tag no longer points to the tested commit." >&2
+              exit 1
+            fi
+          }
+
+          verify_tag
           if ! release=$(gh release view "$tag" --json isDraft,assets); then
             gh release create "$tag" "$zip" \
               --verify-tag --title "QuestTidy ${tag#v}" --generate-notes \
@@ -88,6 +103,6 @@ jobs:
           fi
 
           if jq -e '.isDraft' <<< "$release" >/dev/null; then
-            gh api "repos/$GH_REPO/git/ref/tags/$tag" --silent
+            verify_tag
             gh release edit "$tag" --draft=false
           fi
