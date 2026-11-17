@@ -1,0 +1,29 @@
+name: Bug report
+description: Report a problem with QuestTidy in WoW Forever
+body:
+  - type: input
+    id: versions
+    attributes:
+      label: QuestTidy version and Forever build
+      description: Run `/dump GetBuildInfo()` in WoW to see the client build.
+      placeholder: QuestTidy version, Forever client build
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the menu actions or slash commands that led to the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Quest or item IDs, Lua errors, and screenshots
+      description: Include relevant quest or item IDs and other bag or quest addons. Run `/console scriptErrors 1` to show Lua errors. Redact account names, private chat, and personal information before posting.

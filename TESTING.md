@@ -29,4 +29,4 @@ These checks use the delivered addon code with client API test doubles. They do 
 15. Repeat with missing item data or a locked item. Confirm the addon offers no deletion until complete, current data is available and the item is unlocked.
 16. Check Escape, dragging, scrolling, your UI scale, and other installed bag or quest addons.
 
-Use a disposable item for destructive checks. Report the QuestTidy version, `/dump GetBuildInfo()` output, other bag and quest addons, and any Lua error text.
+Use a disposable item for destructive checks. If a check fails, use the [bug report form](https://github.com/abalbin/QuestTidy/issues/new?template=bug_report.yml).

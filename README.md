@@ -2,7 +2,7 @@
 
 Quest log tools and a lighter bag for **World of Warcraft: Forever**.
 
-QuestTidy extends Blizzard's native interface with tracking shortcuts, exact Wowhead quest links, and a review of quest-related bag items. Version **0.2.2** targets Forever **1.60.1**, interface **16001**.
+QuestTidy extends Blizzard's native interface with tracking shortcuts, exact Wowhead quest links, and a review of quest-related bag items. It targets Forever **1.60.1**, interface **16001**.
 
 ## What it does
 
@@ -65,7 +65,7 @@ The native deletion API may restrict addon calls. A request is not proof that th
 
 Run `luajit tests/run.lua` from the addon directory. The checks execute the actual addon Lua against documented client API test doubles. They do not prove in-game layout, protected-action behavior, or another addon's compatibility. [TESTING.md](TESTING.md) lists the client checks, and [CONTRIBUTING.md](CONTRIBUTING.md) describes how to contribute.
 
-The code targets Blizzard's mirrored Forever UI source at commit `3d8abb1da73acd38e412e24fb3f99454a6392346`, build `1.60.1.70959`. This iteration still requires in-client testing. Enable error dialogs with `/console scriptErrors 1` and include the client build and error text when reporting problems.
+The code targets Blizzard's mirrored Forever UI source at commit `3d8abb1da73acd38e412e24fb3f99454a6392346`, build `1.60.1.70959`. [Report an in-game bug](https://github.com/abalbin/QuestTidy/issues/new?template=bug_report.yml).
 
 ## Sources
 
