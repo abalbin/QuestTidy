@@ -1,0 +1,13 @@
+{
+  "name": "questtidy-release-tools",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "package": "node scripts/package.mjs"
+  },
+  "devDependencies": {
+    "fflate": "0.8.3"
+  }
+}

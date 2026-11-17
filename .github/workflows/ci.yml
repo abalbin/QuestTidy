@@ -1,0 +1,74 @@
+name: CI and releases
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test and package
+    if: github.event_name != 'push' || !github.event.deleted
+    runs-on: ubuntu-24.04
+    outputs:
+      commit: ${{ steps.build.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - name: Install packaging dependency
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install LuaJIT
+        run: sudo apt-get update && sudo apt-get install -y luajit
+      - name: Run Lua checks
+        run: luajit tests/run.lua
+      - name: Build installable ZIP
+        id: build
+        shell: bash
+        run: |
+          npm run package
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Upload installable ZIP
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: questtidy-zip
+          path: dist/QuestTidy-*.zip
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+
+  release:
+    name: Publish GitHub release
+    if: github.event_name == 'push' && github.ref_type == 'tag' && !github.event.deleted
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: questtidy-release-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.build.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: questtidy-zip
+          path: dist
+      - name: Publish the tested ZIP
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          BUILD_COMMIT: ${{ needs.build.outputs.commit }}
+        run: node scripts/publish.mjs "dist/QuestTidy-${GITHUB_REF_NAME#v}.zip"

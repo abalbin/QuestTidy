@@ -16,13 +16,13 @@ QuestTidy does not replace the quest log or bags. It does not change Blizzard's 
 
 ## Install or update
 
-1. Quit WoW.
-2. Place the `QuestTidy` folder inside `_forever_/Interface/AddOns`.
+1. Download `QuestTidy-<version>.zip` from the Assets section of the [latest GitHub release](https://github.com/abalbin/QuestTidy/releases/latest).
+2. Quit WoW and extract the ZIP into `_forever_/Interface/AddOns`.
 3. Check that the path ends in `Interface/AddOns/QuestTidy/QuestTidy.toc`.
 4. If upgrading from the prototype, move `ForeverQuestNotes` out of `Interface/AddOns` so both addons do not load together.
 5. Start WoW and enable **QuestTidy** in the AddOns list.
 
-A repository checkout contains the contents of the addon folder. Name its installed folder `QuestTidy`. A packaged ZIP already contains that folder.
+A repository checkout contains the contents of the addon folder. Name its installed folder `QuestTidy` if you install from a checkout.
 
 ## Track quests
 
