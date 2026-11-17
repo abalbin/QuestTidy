@@ -14,7 +14,7 @@ end
 local function setup(options)
 	options = options or {}
 	local state = { frames = {}, messages = {}, menus = {}, watches = {}, removed = {}, failed = {}, rows = {}, focus = 0,
-		quests = {}, ready = {}, added = {}, bagItems = {}, onQuest = {}, completed = {}, deleteCalls = {} }
+		quests = {}, objectives = {}, ready = {}, added = {}, bagItems = {}, onQuest = {}, completed = {}, deleteCalls = {} }
 	local methods = {}
 	local function region(parent, name)
 		local value = setmetatable({ parent = parent, name = name, scripts = {}, events = {}, points = {}, shown = true, enabled = true }, { __index = methods })
@@ -139,7 +139,11 @@ local function setup(options)
 		header.isCollapsed = true
 	end
 	env.C_QuestLog = {
-		GetNumQuestLogEntries = function() return #visibleQuests() end,
+		GetNumQuestLogEntries = function()
+			local count = 0
+			for _, info in ipairs(state.quests) do if not info.isHeader then count = count + 1 end end
+			return #visibleQuests(), count
+		end,
 		GetInfo = function(index)
 			local info = visibleQuests()[index]
 			if not info then return nil end
@@ -149,6 +153,7 @@ local function setup(options)
 			return copy
 		end,
 		ReadyForTurnIn = function(id) return state.ready[id] end,
+		GetQuestObjectives = function(id) return state.objectives[id] or {} end,
 		IsComplete = function() return false end,
 		IsQuestDisabledForSession = function(id) return state.disabledQuest == id end,
 		GetQuestWatchType = function(id)
@@ -176,7 +181,10 @@ local function setup(options)
 			end
 			return false
 		end,
-		GetTitleForQuestID = function(id) return id == 1456 and "The Karnitol Shipwreck" or "Another quest" end,
+		GetTitleForQuestID = function(id)
+			for _, quest in ipairs(state.quests) do if quest.questID == id then return quest.title end end
+			return id == 1456 and "The Karnitol Shipwreck" or "Another quest"
+		end,
 		GetLogIndexForQuestID = function(id) return state.rows[id] and 1 or nil end,
 	}
 	env.C_SuperTrack = {
@@ -619,6 +627,86 @@ test("all quest starters remain protected including completed ones", function()
 	equal(row.status, "starts_quest", "completed starter status")
 	equal(s.ns.RequestDeleteQuestItem(row), false, "starter deletion rejected")
 	equal(s.popup, nil, "no delete confirmation")
+end)
+
+test("active quest objectives protect bag items without a bag quest ID", function()
+	local s = setup()
+	s.quests = { { questID = 1459, title = "Reagents for Reclaimers Inc." } }
+	s.onQuest[1459] = true
+	s.objectives[1459] = { { type = "item", text = "5/7 Scorpashi Venom" },
+		{ type = "item", text = "Aged Kodo Hide: 3/3", finished = true } }
+	putItem(s, 0, 1, { itemID = 6248, hyperlink = "|Hitem:6248|h[Scorpashi Venom]|h" })
+	putItem(s, 0, 2, { itemID = 6249, hyperlink = "|Hitem:6249|h[Aged Kodo Hide]|h" })
+	for _, row in ipairs(s.ns.ScanQuestItems()) do
+		equal(row.status, "active", row.name .. " must be active")
+		equal(s.ns.RequestDeleteQuestItem(row), false, "active objective item cannot open delete confirmation")
+	end
+	assert(s.ns.ReviewQuestItems())
+	assert(s:hasText("Reagents for Reclaimers Inc."), "bag review shows the quest name")
+	assert(not s.popup, "no deletion confirmation")
+end)
+
+test("a collapsed untracked Reagents quest still protects its objective item IDs", function()
+	local s = setup()
+	s.quests = { { isHeader = true, isCollapsed = true }, { questID = 1459, title = "Reagents for Reclaimers Inc." } }
+	s.onQuest[1459] = true
+	putItem(s, 0, 1, { itemID = 6248 })
+	local row = s.ns.ScanQuestItems()[1]
+	equal(row.questID, 1459, "matched verified quest ID")
+	equal(row.status, "active", "protected without a visible quest entry")
+	equal(s.quests[1].isCollapsed, true, "header preserved")
+	s.onQuest[1459] = false
+	equal(s.ns.ScanQuestItems()[1].status, "unknown", "verified link is conditional on an active quest")
+end)
+
+test("item objectives match whole names or exact item IDs, including completed objectives", function()
+	local s = setup()
+	s.quests = { { questID = 101, title = "Collection quest" } }
+	s.onQuest[101] = true
+	s.objectives[101] = {
+		{ type = "item", text = "3/3 Gathered Herb (Complete)", finished = true },
+		{ type = "item", text = "2/5 |Hitem:1002|h[Shared Label]|h" },
+		{ type = "monster", text = "1/2 Creature" },
+		{ type = "item", text = "Extra Reagent 2/5" },
+	}
+	local labels = { "Gathered Herb", "Shared Label", "Shared Label", "Creature", "Herb", "Extra Reagent" }
+	for slot, label in ipairs(labels) do
+		putItem(s, 0, slot, { hyperlink = "|Hitem:" .. (1000 + slot) .. "|h[" .. label .. "]|h" })
+	end
+	for _, row in ipairs(s.ns.ScanQuestItems()) do
+		local expected = (row.slot <= 2 or row.slot == 6) and "active" or "unknown"
+		equal(row.status, expected, "objective match for slot " .. row.slot)
+	end
+end)
+
+test("an uninspected active quest blocks unknown deletion", function()
+	local s = setup()
+	s.quests = { { isHeader = true, isCollapsed = true }, { questID = 101, title = "Hidden quest" } }
+	s.onQuest[101] = true
+	putItem(s, 0, 1)
+	local row = s.ns.ScanQuestItems()[1]
+	equal(s.ns.RequestDeleteQuestItem(row), false, "inspection could not cover the full log")
+	assert(not s.popup, "no confirmation on incomplete inspection")
+end)
+
+test("accepting a quest after opening confirmation prevents deletion", function()
+	local s, item, row = unknownItem()
+	assert(s.ns.RequestDeleteQuestItem(row), "confirmation opened before accepting quest")
+	s.quests = { { questID = 101, title = "New quest" } }
+	s.onQuest[101] = true
+	s.objectives[101] = { { type = "item", text = "2/2 Quest item", finished = true } }
+	s:confirm()
+	equal(#s.deleteCalls, 0, "fresh active objective blocks deletion")
+	equal(s.bagItems[0][1], item, "original item still in bag")
+end)
+
+test("a partial objective response blocks unknown deletion", function()
+	local s, _, row = unknownItem()
+	s.quests = { { questID = 101, title = "Partial quest" } }
+	s.onQuest[101] = true
+	s.env.C_QuestLog.GetNumQuestObjectives = function() return 1 end
+	equal(s.ns.RequestDeleteQuestItem(row), false, "objective table omitted a reported objective")
+	assert(not s.popup, "no confirmation until objective data is available")
 end)
 
 test("client active flag and active quest ID both protect items", function()

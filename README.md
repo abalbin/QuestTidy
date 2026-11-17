@@ -2,7 +2,7 @@
 
 Quest log tools and a lighter bag for **World of Warcraft: Forever**.
 
-QuestTidy extends Blizzard's native interface with tracking shortcuts, exact Wowhead quest links, and a review of quest-related bag items. Version **0.2.1** targets Forever **1.60.1**, interface **16001**.
+QuestTidy extends Blizzard's native interface with tracking shortcuts, exact Wowhead quest links, and a review of quest-related bag items. Version **0.2.2** targets Forever **1.60.1**, interface **16001**.
 
 ## What it does
 
@@ -42,9 +42,9 @@ Open a bag's portrait or settings menu and choose **Review quest items**, or run
 
 The list puts items the client flags or classifies as quest items first. Other items linked to quests appear in a separate section. Hover an item icon to see its tooltip.
 
-Items the client associates with an active quest are protected. Quest starters are also protected, including starters whose quest was completed before, because they may be repeatable or useful later.
+QuestTidy checks both bag metadata and item objectives in the quest log. A match can show the active quest's name and protects the item through turn-in. Quest starters are also protected, including starters whose quest was completed before, because they may be repeatable or useful later. Scorpashi Venom and Aged Kodo Hide also have a verified ID match for [Reagents for Reclaimers Inc.](https://www.wowhead.com/forever/quest=1459/reagents-for-reclaimers-inc).
 
-The **Use unknown** label means an item may still be needed for an active, future, repeatable, or shared quest. The client exposes limited quest associations, and ordinary items used by quests may be absent from the review.
+The **Use unknown** label means an item may still be needed for an active, future, repeatable, or shared quest. The client exposes limited quest associations, and ordinary items used by quests may be absent from the review. If you see **Quest check incomplete**, expand your quest log and refresh the bag review before attempting deletion.
 
 To discard an item you have reviewed, choose **Delete...** and read the confirmation. Deletion applies to the **entire displayed stack** and is irreversible. There is no bulk deletion. QuestTidy rechecks the item instance, location, stack count, lock, quest status, cursor, and combat before requesting deletion. A moved or changed item requires a fresh review. Missing data disables deletion.
 

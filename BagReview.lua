@@ -4,6 +4,8 @@ local menuRegistered = false
 local popupName = "QUESTTIDY_DELETE_QUEST_ITEM"
 local fallbackIcon = "Interface\\Icons\\INV_Misc_QuestionMark"
 local listWidth, rowHeight = 584, 50
+-- Forever quest 1459: the ID match also works when the quest's zone is collapsed.
+local verifiedObjectives = { [1459] = { 6248, 6249 } }
 
 local statuses = {
     active = { label = "Active quest", order = 1, mayDelete = false },
@@ -36,7 +38,88 @@ local function CopyRow(row)
     return copy
 end
 
-local function ReadItem(bag, slot)
+local function ItemName(link)
+    return type(link) == "string" and link:match("|h%[(.-)%]|h") or nil
+end
+
+local function ObjectiveItemName(text, finished)
+    if type(text) ~= "string" then
+        return nil
+    end
+    text = text:gsub(" ", " ")
+    if finished and text:match("%(([^()]*)%)%s*$") == (COMPLETE or "Complete") then
+        text = text:gsub("%s+%([^()]*%)%s*$", "")
+    end
+    local name = text:gsub("^%s*%d+%s*/%s*%d+%s+", "")
+        :gsub("[%s:]+%d+%s*/%s*%d+%s*$", ""):match("^%s*(.-)%s*$")
+    return name ~= "" and not name:find("%d+%s*/%s*%d+") and name or nil
+end
+
+local function ReadActiveObjectives()
+    local index = { byID = {}, byName = {}, complete = false }
+    if not C_QuestLog or not C_QuestLog.GetInfo or not C_QuestLog.GetNumQuestLogEntries
+        or not C_QuestLog.GetQuestObjectives or not C_QuestLog.IsOnQuest then
+        return index
+    end
+    local seen, visible = {}, 0
+    local complete = true
+    local function addQuest(questID, title)
+        if not IsPositiveInteger(questID) or seen[questID] or not C_QuestLog.IsOnQuest(questID) then
+            return false
+        end
+        seen[questID] = true
+        local quest = { id = questID, title = title or (C_QuestLog.GetTitleForQuestID
+            and C_QuestLog.GetTitleForQuestID(questID)) }
+        for _, itemID in ipairs(verifiedObjectives[questID] or {}) do
+            index.byID[itemID] = quest
+        end
+        local ok, objectives = pcall(C_QuestLog.GetQuestObjectives, questID)
+        local count = C_QuestLog.GetNumQuestObjectives and C_QuestLog.GetNumQuestObjectives(questID)
+        if not ok or type(objectives) ~= "table" then
+            complete = complete and ok and count == 0
+            return true
+        end
+        if type(count) == "number" and #objectives < count then
+            complete = false
+        end
+        for _, objective in ipairs(objectives) do
+            if objective.type == "item" then
+                local text = objective.text
+                local itemID = type(text) == "string" and tonumber(text:match("|Hitem:(%d+)"))
+                if itemID then
+                    index.byID[itemID] = index.byID[itemID] or quest
+                else
+                    local name = ObjectiveItemName(text, objective.finished)
+                    if name then
+                        index.byName[name] = index.byName[name] or quest
+                    else
+                        complete = false
+                    end
+                end
+            end
+        end
+        return true
+    end
+    local entries, total = C_QuestLog.GetNumQuestLogEntries()
+    for entry = 1, entries do
+        local info = C_QuestLog.GetInfo(entry)
+        if info and not info.isHeader and addQuest(info.questID, info.title) then
+            visible = visible + 1
+        end
+    end
+    if C_QuestLog.GetNumQuestWatches and C_QuestLog.GetQuestIDForQuestWatchIndex then
+        for watch = 1, C_QuestLog.GetNumQuestWatches() do
+            addQuest(C_QuestLog.GetQuestIDForQuestWatchIndex(watch))
+        end
+    end
+    for questID in pairs(verifiedObjectives) do
+        addQuest(questID)
+    end
+    index.complete = complete and type(total) == "number" and visible == total
+    return index
+end
+
+local function ReadItem(bag, slot, objectives)
     if not IsCarried(bag, slot) or not C_Container or not C_Container.GetContainerItemInfo then
         return nil
     end
@@ -60,8 +143,10 @@ local function ReadItem(bag, slot)
             classID, itemIcon = itemClass, icon
         end
     end
-    local isQuestItem = classID == 12 or (questOK and questInfo.isQuestItem == true)
-    local active = questOK and questInfo.isActive == true
+    local name = ItemName(info.hyperlink)
+    local quest = objectives.byID[info.itemID] or objectives.byName[name and name:gsub(" ", " ")]
+    local isQuestItem = classID == 12 or (questOK and questInfo.isQuestItem == true) or quest ~= nil
+    local active = (questOK and questInfo.isActive == true) or quest ~= nil
     if not isQuestItem and not questID and not active then
         return nil
     end
@@ -78,7 +163,14 @@ local function ReadItem(bag, slot)
     elseif questID then
         complete = false
     end
+    if quest then
+        questID = quest.id
+    end
     local status = active and "active" or (questID and "starts_quest" or "unknown")
+    local questTitle = quest and quest.title
+    if not questTitle and active and questID and C_QuestLog and C_QuestLog.GetTitleForQuestID then
+        questTitle = C_QuestLog.GetTitleForQuestID(questID)
+    end
     local completed
     if questID and C_QuestLog and C_QuestLog.IsQuestFlaggedCompleted then
         local completedOK, value = pcall(C_QuestLog.IsQuestFlaggedCompleted, questID)
@@ -96,14 +188,13 @@ local function ReadItem(bag, slot)
             end
         end
     end
-    local link = info.hyperlink
-    local name = type(link) == "string" and link:match("|h%[(.-)%]|h")
     local icon = IsPositiveInteger(info.iconFileID) and info.iconFileID
         or (IsPositiveInteger(itemIcon) and itemIcon or fallbackIcon)
     return {
         bag = bag, slot = slot, itemID = info.itemID, hyperlink = info.hyperlink,
         name = name or ("Item " .. info.itemID), icon = icon, isQuestItem = isQuestItem,
         count = info.stackCount, guid = guid, status = status, questID = questID,
+        questTitle = questTitle, objectivesChecked = objectives.complete,
         completed = completed, locked = info.isLocked, metadataComplete = complete,
     }
 end
@@ -113,11 +204,12 @@ function namespace.ScanQuestItems()
     if not C_Container or not C_Container.GetContainerNumSlots or not C_Container.GetContainerItemInfo then
         return rows, "Bag information is unavailable. Use ordinary bag management."
     end
+    local objectives = ReadActiveObjectives()
     for bag = 0, LastBag() do
         local ok, count = pcall(C_Container.GetContainerNumSlots, bag)
         if ok and type(count) == "number" then
             for slot = 1, count do
-                local row = ReadItem(bag, slot)
+                local row = ReadItem(bag, slot, objectives)
                 if row then
                     rows[#rows + 1] = row
                 end
@@ -147,6 +239,9 @@ local function CanDelete(row)
     if not row or not statuses[row.status] or not statuses[row.status].mayDelete then
         return false, "This item is associated with an active quest or quest starter and is protected."
     end
+    if not row.objectivesChecked then
+        return false, "QuestTidy couldn't check every active quest. Expand your quest log and refresh the review.", "Quest check incomplete"
+    end
     if not row.metadataComplete or type(row.hyperlink) ~= "string" or row.hyperlink == ""
         or not IsPositiveInteger(row.count) or row.locked == nil then
         return false, "Item information is incomplete. Wait for it to load or use ordinary bag management.", "Item data incomplete"
@@ -170,7 +265,7 @@ local function Revalidate(snapshot)
     if not snapshot or not IsCarried(snapshot.bag, snapshot.slot) then
         return nil, "The item location is no longer valid. Refresh the review."
     end
-    local current = ReadItem(snapshot.bag, snapshot.slot)
+    local current = ReadItem(snapshot.bag, snapshot.slot, ReadActiveObjectives())
     if not current or current.itemID ~= snapshot.itemID or current.guid ~= snapshot.guid
         or current.hyperlink ~= snapshot.hyperlink or current.count ~= snapshot.count then
         return nil, "The item or stack changed. Refresh the review and select it again."
@@ -339,7 +434,8 @@ local function RefreshReview()
         local status = statuses[snapshot.status]
         local bag = snapshot.bag == 0 and "Backpack" or ("Bag " .. snapshot.bag)
         local allowed, _, unavailable = CanDelete(snapshot)
-        local details = (status.mayDelete and unavailable or status.label)
+        local label = snapshot.questTitle and ("Active: " .. snapshot.questTitle) or status.label
+        local details = (status.mayDelete and unavailable or label)
             .. "  •  Qty " .. tostring(snapshot.count or "?")
             .. "  •  " .. bag .. ", slot " .. snapshot.slot
         row.details:SetText(details)
