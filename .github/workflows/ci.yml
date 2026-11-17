@@ -1,0 +1,93 @@
+name: CI and releases
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test and package
+    if: github.event_name != 'push' || !github.event.deleted
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install LuaJIT
+        run: sudo apt-get update && sudo apt-get install -y luajit
+      - name: Run Lua checks
+        run: luajit tests/run.lua
+      - name: Build installable ZIP
+        shell: bash
+        run: |
+          args=(--output-dir dist)
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            args+=(--tag "$GITHUB_REF_NAME")
+          fi
+          python3 scripts/package.py "${args[@]}"
+      - name: Upload installable ZIP
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: questtidy-zip
+          path: dist/QuestTidy-*.zip
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+
+  release:
+    name: Publish GitHub release
+    if: github.event_name == 'push' && github.ref_type == 'tag' && !github.event.deleted
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: questtidy-release-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: questtidy-zip
+          path: dist
+      - name: Publish the tested ZIP
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="$GITHUB_REF_NAME"
+          asset="QuestTidy-${tag#v}.zip"
+          zip="dist/$asset"
+          test -f "$zip"
+
+          if ! release=$(gh release view "$tag" --json isDraft,assets); then
+            gh release create "$tag" "$zip" \
+              --verify-tag --title "QuestTidy ${tag#v}" --generate-notes \
+              --notes 'Download the QuestTidy ZIP under Assets. Extract the `QuestTidy` folder into World of Warcraft Forever’s `Interface/AddOns` directory.'
+            exit 0
+          fi
+
+          if jq -e --arg asset "$asset" 'any(.assets[]; .name == $asset)' <<< "$release" >/dev/null; then
+            tmp=$(mktemp -d)
+            trap 'rm -rf "$tmp"' EXIT
+            gh release download "$tag" --pattern "$asset" --dir "$tmp"
+            if ! cmp -s "$zip" "$tmp/$asset"; then
+              echo "Existing release asset differs from the tested ZIP: $asset" >&2
+              exit 1
+            fi
+          elif jq -e '.isDraft' <<< "$release" >/dev/null; then
+            gh release upload "$tag" "$zip"
+          else
+            echo "Published release $tag is missing $asset" >&2
+            exit 1
+          fi
+
+          if jq -e '.isDraft' <<< "$release" >/dev/null; then
+            gh api "repos/$GH_REPO/git/ref/tags/$tag" --silent
+            gh release edit "$tag" --draft=false
+          fi
