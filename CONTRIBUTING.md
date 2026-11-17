@@ -1,6 +1,6 @@
 # Contribute to QuestTidy
 
-Open an issue for a bug, an API change, or a feature proposal. Include the addon version, Forever client build, reproduction steps, expected result, actual result, and relevant Lua error text. Do not include account names, private chat, or other personal data in screenshots.
+Use the [bug report form](https://github.com/abalbin/QuestTidy/issues/new?template=bug_report.yml) for problems. For an API change or feature proposal, choose **Open a blank issue** in the [issue chooser](https://github.com/abalbin/QuestTidy/issues/new/choose).
 
 For code changes:
 
@@ -18,8 +18,10 @@ For quest advice, use numeric quest IDs and a review date. Write your own concis
 
 ## Publish a release
 
+Release tags belong to the repository owner (`abalbin`). Contributors can propose release changes in a pull request.
+
 1. Update `## Version` in `QuestTidy.toc` in the release changes and merge them to `main`.
-2. Update your local `main`, then create and push a tag matching the TOC version. For example, for version `0.2.3`, run `git tag -a v0.2.3 -m 'QuestTidy 0.2.3'` followed by `git push origin v0.2.3`.
+2. Switch to `main` and run `git pull --ff-only origin main`. Create and push a tag matching the TOC version. For example, for `0.2.3`, run `git tag -a v0.2.3 -m 'QuestTidy 0.2.3'` followed by `git push origin v0.2.3`.
 3. Check the **CI and releases** workflow and the resulting GitHub release. The release asset is `QuestTidy-<version>.zip`.
 
 To build the same ZIP locally, run `npm ci --ignore-scripts` followed by `npm run package` with Node.js 20 or newer. The archive in `dist/` contains a single `QuestTidy/` folder with the TOC, its listed files, and the license. Pull request checks build the same package.
