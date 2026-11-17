@@ -2,7 +2,7 @@
 
 Quest log tools and a lighter bag for **World of Warcraft: Forever**.
 
-QuestTidy extends Blizzard's native interface with tracking shortcuts, exact Wowhead quest links, and a review of quest-related bag items. Version **0.2.0** is an early testing build for Forever **1.60.1**, interface **16001**.
+QuestTidy extends Blizzard's native interface with tracking shortcuts, exact Wowhead quest links, and a review of quest-related bag items. Version **0.2.1** targets Forever **1.60.1**, interface **16001**.
 
 ## What it does
 
@@ -40,9 +40,11 @@ WoW addons cannot make arbitrary web requests. QuestTidy does not download comme
 
 Open a bag's portrait or settings menu and choose **Review quest items**, or run `/questtidy bags`. The review scans carried bags, including a reagent bag where present. It excludes bank storage and the keyring.
 
+The list puts items the client flags or classifies as quest items first. Other items linked to quests appear in a separate section. Hover an item icon to see its tooltip.
+
 Items the client associates with an active quest are protected. Quest starters are also protected, including starters whose quest was completed before, because they may be repeatable or useful later.
 
-Other discovered quest-related items show **unknown quest use**. This does not establish that they are obsolete. The client does not expose a complete item-to-quest database, so some active, future, repeatable, or shared uses cannot be identified. Ordinary items used by quests may not appear at all.
+The **Use unknown** label means an item may still be needed for an active, future, repeatable, or shared quest. The client exposes limited quest associations, and ordinary items used by quests may be absent from the review.
 
 To discard an item you have reviewed, choose **Delete...** and read the confirmation. Deletion applies to the **entire displayed stack** and is irreversible. There is no bulk deletion. QuestTidy rechecks the item instance, location, stack count, lock, quest status, cursor, and combat before requesting deletion. A moved or changed item requires a fresh review. Missing data disables deletion.
 

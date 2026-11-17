@@ -2,7 +2,7 @@
 ## Title: QuestTidy
 ## Notes: Quest tracking controls, cautious quest-item review, and copyable Wowhead advice links.
 ## Author: Arturo and contributors
-## Version: 0.2.0
+## Version: 0.2.1
 
 Notes.lua
 BagReview.lua

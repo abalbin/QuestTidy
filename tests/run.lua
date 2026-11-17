@@ -57,6 +57,8 @@ local function setup(options)
 	function methods:SetFormattedText(format, ...) self:SetText(string.format(format, ...)) end
 	function methods:CreateFontString(name) return region(self, name) end
 	function methods:CreateTexture(name) return region(self, name) end
+	function methods:SetTexture(texture) self.texture = texture end
+	function methods:SetHyperlink(link) self.hyperlink = link end
 	function methods:SetParent(parent) self.parent = parent end
 	function methods:GetParent() return self.parent end
 	function methods:GetName() return self.name end
@@ -82,7 +84,7 @@ local function setup(options)
 	function methods:SetFocus() self.focused = true end
 	function methods:ClearFocus() self.focused = false end
 	function methods:HighlightText() self.highlighted = true end
-	for _, method in ipairs({ "SetMovable", "EnableMouse", "RegisterForDrag", "SetClampedToScreen", "SetFrameStrata", "SetFrameLevel", "SetAutoFocus", "SetMultiLine", "SetFontObject", "SetJustifyH", "SetJustifyV", "SetTextInsets", "SetMaxLetters", "SetTextColor", "SetWordWrap", "SetNonSpaceWrap", "SetHyperlinksEnabled", "SetVerticalScroll", "SetAllPoints", "StartMoving", "StopMovingOrSizing", "SetHitRectInsets", "SetNormalFontObject", "SetDisabledFontObject", "SetBackdrop", "SetBackdropColor", "SetBackdropBorderColor", "SetResizable", "SetResizeBounds", "SetPropagateKeyboardInput" }) do
+	for _, method in ipairs({ "SetMovable", "EnableMouse", "RegisterForDrag", "SetClampedToScreen", "SetFrameStrata", "SetFrameLevel", "SetAutoFocus", "SetMultiLine", "SetFontObject", "SetJustifyH", "SetJustifyV", "SetTextInsets", "SetMaxLetters", "SetTextColor", "SetWordWrap", "SetNonSpaceWrap", "SetHyperlinksEnabled", "SetVerticalScroll", "SetAllPoints", "StartMoving", "StopMovingOrSizing", "SetHitRectInsets", "SetNormalFontObject", "SetDisabledFontObject", "SetBackdrop", "SetBackdropColor", "SetBackdropBorderColor", "SetResizable", "SetResizeBounds", "SetPropagateKeyboardInput", "SetColorTexture", "SetTexCoord", "SetVertexColor", "SetMaxLines" }) do
 		methods[method] = function() end
 	end
 	local env = setmetatable({}, { __index = _G })
@@ -109,7 +111,8 @@ local function setup(options)
 		return frame
 	end
 	env.GameTooltip = region()
-	env.GameTooltip.SetOwner = function() end
+	env.GameTooltip.SetOwner = function(self, owner) self.owner = owner end
+	env.GameTooltip.GetOwner = function(self) return self.owner end
 	env.GameTooltip.AddLine = function() end
 	env.QuestUtil = { CanRemoveQuestWatch = function() return not state.restricted end }
 	env.Constants = { QuestWatchConsts = { MAX_QUEST_WATCHES = 40 } }
@@ -229,7 +232,7 @@ local function setup(options)
 		GetItemInfoInstant = function(id)
 			for _, items in pairs(state.bagItems) do
 				for _, item in pairs(items) do
-					if item.itemID == id and not item.uncached then return id, "Quest", "Quest", "", 0, item.classID or 12, 0 end
+					if item.itemID == id and not item.uncached then return id, "Quest", "Quest", "", item.fallbackIcon, item.classID or 12, 0 end
 				end
 			end
 		end,
@@ -585,6 +588,27 @@ test("bag scan includes carried reagent bag and excludes bank", function()
 	putItem(s, -1, 1)
 	putItem(s, 0, 2, { classID = 7, questInfo = { isQuestItem = false, isActive = false } })
 	equal(#s.ns.ScanQuestItems(), 2, "carried quest items only")
+end)
+
+test("bag review puts quest items first and shows their inventory icons", function()
+	local s = setup()
+	putItem(s, 0, 1, { classID = 7, questInfo = { isQuestItem = false, isActive = false, questID = 91 } })
+	local venom = putItem(s, 0, 5, { iconFileID = 134015, fallbackIcon = 134016,
+		hyperlink = "|Hitem:1005|h[Scorpashi Venom]|h", questInfo = { isQuestItem = false, isActive = false } })
+	putItem(s, 1, 1, { classID = 7, fallbackIcon = 134017, questInfo = { isQuestItem = true, isActive = true } })
+	local rows = s.ns.ScanQuestItems()
+	equal(#rows, 3, "three visible items")
+	equal(rows[1].bag, 1, "known active quest item first")
+	equal(rows[2].itemID, venom.itemID, "quest-class item before earlier quest starter")
+	equal(rows[3].slot, 1, "other quest-related item last")
+	assert(s.ns.ReviewQuestItems(), "review opens")
+	local textures = {}
+	for _, region in ipairs(s.frames) do
+		if region.texture and region:IsVisible() then textures[region.texture] = true end
+	end
+	assert(textures[134015], "inventory icon is displayed")
+	assert(textures[134017], "item API icon is displayed when inventory icon is missing")
+	assert(not textures[134016], "inventory icon takes precedence")
 end)
 
 test("all quest starters remain protected including completed ones", function()
