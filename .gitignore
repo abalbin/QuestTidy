@@ -2,3 +2,5 @@
 *.zip
 *.bak
 *.log
+node_modules/
+dist/
