@@ -1,9 +1,15 @@
 local _, namespace = ...
 local reviewFrame
+local bagHighlight
 local menuRegistered = false
 local popupName = "QUESTTIDY_DELETE_QUEST_ITEM"
 local fallbackIcon = "Interface\\Icons\\INV_Misc_QuestionMark"
-local listWidth, rowHeight = 584, 50
+local listWidth, rowHeight = 584, 62
+local zoneFilters = {
+    { key = "all", label = "All items" },
+    { key = "current", label = "Current zone", empty = "No quest items with a known destination in this zone." },
+    { key = "other", label = "Other zones", empty = "No quest items with known destinations in other zones." },
+}
 -- Forever quest 1459: the ID match also works when the quest's zone is collapsed.
 local verifiedObjectives = { [1459] = { 6248, 6249 } }
 
@@ -55,6 +61,17 @@ local function ObjectiveItemName(text, finished)
     return name ~= "" and not name:find("%d+%s*/%s*%d+") and name or nil
 end
 
+local function AddObjectiveMatch(byItem, key, quest, preferred)
+    local match = byItem[key]
+    if not match then
+        match = { primary = quest, questIDs = {} }
+        byItem[key] = match
+    elseif preferred then
+        match.primary = quest
+    end
+    match.questIDs[quest.id] = true
+end
+
 local function ReadActiveObjectives()
     local index = { byID = {}, byName = {}, complete = false }
     if not C_QuestLog or not C_QuestLog.GetInfo or not C_QuestLog.GetNumQuestLogEntries
@@ -71,7 +88,7 @@ local function ReadActiveObjectives()
         local quest = { id = questID, title = title or (C_QuestLog.GetTitleForQuestID
             and C_QuestLog.GetTitleForQuestID(questID)) }
         for _, itemID in ipairs(verifiedObjectives[questID] or {}) do
-            index.byID[itemID] = quest
+            AddObjectiveMatch(index.byID, itemID, quest, true)
         end
         local ok, objectives = pcall(C_QuestLog.GetQuestObjectives, questID)
         local count = C_QuestLog.GetNumQuestObjectives and C_QuestLog.GetNumQuestObjectives(questID)
@@ -87,11 +104,11 @@ local function ReadActiveObjectives()
                 local text = objective.text
                 local itemID = type(text) == "string" and tonumber(text:match("|Hitem:(%d+)"))
                 if itemID then
-                    index.byID[itemID] = index.byID[itemID] or quest
+                    AddObjectiveMatch(index.byID, itemID, quest)
                 else
                     local name = ObjectiveItemName(text, objective.finished)
                     if name then
-                        index.byName[name] = index.byName[name] or quest
+                        AddObjectiveMatch(index.byName, name, quest)
                     else
                         complete = false
                     end
@@ -119,6 +136,19 @@ local function ReadActiveObjectives()
     return index
 end
 
+local function ReadItemGUID(bag, slot)
+    if not C_Item or not C_Item.GetItemGUID or not ItemLocation or not ItemLocation.CreateFromBagAndSlot then
+        return nil
+    end
+    local locationOK, location = pcall(ItemLocation.CreateFromBagAndSlot, ItemLocation, bag, slot)
+    if locationOK and location then
+        local ok, value = pcall(C_Item.GetItemGUID, location)
+        if ok and type(value) == "string" and value ~= "" then
+            return value
+        end
+    end
+end
+
 local function ReadItem(bag, slot, objectives)
     if not IsCarried(bag, slot) or not C_Container or not C_Container.GetContainerItemInfo then
         return nil
@@ -144,7 +174,10 @@ local function ReadItem(bag, slot, objectives)
         end
     end
     local name = ItemName(info.hyperlink)
-    local quest = objectives.byID[info.itemID] or objectives.byName[name and name:gsub(" ", " ")]
+    local idMatch = objectives.byID[info.itemID]
+    local nameMatch = objectives.byName[name and name:gsub(" ", " ")]
+    local match = idMatch or nameMatch
+    local quest = match and match.primary
     local isQuestItem = classID == 12 or (questOK and questInfo.isQuestItem == true) or quest ~= nil
     local active = (questOK and questInfo.isActive == true) or quest ~= nil
     if not isQuestItem and not questID and not active then
@@ -163,6 +196,17 @@ local function ReadItem(bag, slot, objectives)
     elseif questID then
         complete = false
     end
+    local relatedQuestIDs = questID and { [questID] = true } or {}
+    if idMatch then
+        for itemQuestID in pairs(idMatch.questIDs) do
+            relatedQuestIDs[itemQuestID] = true
+        end
+    end
+    if nameMatch then
+        for itemQuestID in pairs(nameMatch.questIDs) do
+            relatedQuestIDs[itemQuestID] = true
+        end
+    end
     if quest then
         questID = quest.id
     end
@@ -178,22 +222,13 @@ local function ReadItem(bag, slot, objectives)
             completed = value
         end
     end
-    local guid
-    if C_Item and C_Item.GetItemGUID and ItemLocation and ItemLocation.CreateFromBagAndSlot then
-        local locationOK, location = pcall(ItemLocation.CreateFromBagAndSlot, ItemLocation, bag, slot)
-        if locationOK and location then
-            local guidOK, value = pcall(C_Item.GetItemGUID, location)
-            if guidOK and type(value) == "string" and value ~= "" then
-                guid = value
-            end
-        end
-    end
     local icon = IsPositiveInteger(info.iconFileID) and info.iconFileID
         or (IsPositiveInteger(itemIcon) and itemIcon or fallbackIcon)
     return {
         bag = bag, slot = slot, itemID = info.itemID, hyperlink = info.hyperlink,
         name = name or ("Item " .. info.itemID), icon = icon, isQuestItem = isQuestItem,
-        count = info.stackCount, guid = guid, status = status, questID = questID,
+        count = info.stackCount, guid = ReadItemGUID(bag, slot), status = status, questID = questID,
+        relatedQuestIDs = relatedQuestIDs,
         questTitle = questTitle, objectivesChecked = objectives.complete,
         completed = completed, locked = info.isLocked, metadataComplete = complete,
     }
@@ -230,6 +265,69 @@ function namespace.ScanQuestItems()
         return a.slot < b.slot
     end)
     return rows
+end
+
+local function ReadZone(mapID, zoneType)
+    local seen = {}
+    while IsPositiveInteger(mapID) and not seen[mapID] do
+        seen[mapID] = true
+        local ok, map = pcall(C_Map.GetMapInfo, mapID)
+        if not ok or type(map) ~= "table" then
+            return nil
+        end
+        if map.mapType == zoneType then
+            local name = type(map.name) == "string" and map.name ~= "" and map.name or nil
+            return { id = mapID, name = name }
+        end
+        mapID = map.parentMapID
+    end
+end
+
+local function ReadZoneContext()
+    local zoneType = Enum and Enum.UIMapType and Enum.UIMapType.Zone
+    if not zoneType or not C_Map or not C_Map.GetMapInfo or not C_Map.GetBestMapForUnit then
+        return nil, function() end
+    end
+    local ok, mapID = pcall(C_Map.GetBestMapForUnit, "player")
+    local current = ok and ReadZone(mapID, zoneType) or nil
+    local destinations = {}
+    local function GetDestination(questID)
+        if destinations[questID] == nil and GetQuestUiMapID then
+            -- The native Destination Map omits travel waypoints.
+            local success, questMapID = pcall(GetQuestUiMapID, questID, true)
+            destinations[questID] = (success and ReadZone(questMapID, zoneType)) or false
+        end
+        return destinations[questID]
+    end
+    return current, GetDestination
+end
+
+local function ReadItemZone(row, currentZone, GetDestination)
+    local zoneIDs, names = {}, {}
+    local inCurrentZone, unknown = false, false
+    for questID in pairs(row.relatedQuestIDs) do
+        local zone = GetDestination(questID)
+        if not zone then
+            unknown = true
+        elseif not zoneIDs[zone.id] then
+            zoneIDs[zone.id] = true
+            if zone.name then
+                names[#names + 1] = zone.name
+            end
+            inCurrentZone = inCurrentZone or (currentZone and currentZone.id == zone.id)
+        end
+    end
+    local scope = "unknown"
+    if inCurrentZone then
+        scope = "current"
+    elseif currentZone and not unknown and next(zoneIDs) then
+        scope = "other"
+    end
+    if #names == 0 then
+        return scope
+    end
+    table.sort(names)
+    return scope, table.concat(names, ", ") .. (unknown and " (some destinations unknown)" or "")
 end
 
 local function CanDelete(row)
@@ -330,6 +428,105 @@ function namespace.RequestDeleteQuestItem(row)
     return true
 end
 
+local function FindStack(row)
+    if ReadItemGUID(row.bag, row.slot) == row.guid then
+        return row.bag, row.slot
+    end
+    for bag = 0, LastBag() do
+        local ok, count = pcall(C_Container.GetContainerNumSlots, bag)
+        if ok and type(count) == "number" then
+            for slot = 1, count do
+                if ReadItemGUID(bag, slot) == row.guid then
+                    return bag, slot
+                end
+            end
+        end
+    end
+end
+
+local function IsSlotButton(button, stack)
+    return stack and button and button:IsVisible() and button:GetBagID() == stack.bag
+        and button:GetID() == stack.slot
+end
+
+local function CreateBagHighlight()
+    local frame = CreateFrame("Frame", "QuestTidyBagItemHighlight", UIParent)
+    frame:Hide()
+    frame:EnableMouse(false)
+    local edges = {
+        { "TOPLEFT", "TOPRIGHT", "SetHeight" },
+        { "BOTTOMLEFT", "BOTTOMRIGHT", "SetHeight" },
+        { "TOPLEFT", "BOTTOMLEFT", "SetWidth" },
+        { "TOPRIGHT", "BOTTOMRIGHT", "SetWidth" },
+    }
+    for _, edge in ipairs(edges) do
+        local texture = frame:CreateTexture(nil, "OVERLAY")
+        texture:SetPoint(edge[1])
+        texture:SetPoint(edge[2])
+        texture[edge[3]](texture, 3)
+        texture:SetColorTexture(1, 0.79, 0.12, 1)
+    end
+    frame:SetScript("OnHide", function(self)
+        self.stack = nil
+        self:Hide()
+    end)
+    frame:SetScript("OnUpdate", function(self, elapsed)
+        self.remaining = self.remaining - elapsed
+        local stack = self.stack
+        if self.remaining <= 0 or not IsSlotButton(self:GetParent(), stack) then
+            self:Hide()
+        elseif self.remaining <= self.nextIdentityCheck then
+            self.nextIdentityCheck = self.remaining - 0.1
+            if ReadItemGUID(stack.bag, stack.slot) ~= stack.guid then
+                self:Hide()
+            end
+        end
+    end)
+    return frame
+end
+
+local function FindInBags(row)
+    if bagHighlight then
+        bagHighlight:Hide()
+    end
+    if InCombatLockdown() then
+        Print("Wait until combat ends to find an item in your bags.")
+        return
+    end
+    if not row or not row.guid then
+        Print("This stack could not be identified. Refresh the review and try again.")
+        return
+    end
+    if not OpenBag or not ContainerFrameUtil_GetItemButtonAndContainer
+        or not C_Container or not C_Container.GetContainerNumSlots then
+        Print("Find in bags is unavailable in this client.")
+        return
+    end
+    local bag, slot = FindStack(row)
+    if not bag then
+        Print("The selected stack is no longer in your carried bags. Refresh the review.")
+        return
+    end
+    OpenBag(bag)
+    local button = ContainerFrameUtil_GetItemButtonAndContainer(bag, slot)
+    local stack = { bag = bag, slot = slot, guid = row.guid }
+    if not IsSlotButton(button, stack) or ReadItemGUID(bag, slot) ~= stack.guid then
+        Print("The selected stack could not be highlighted. Check your bags and try again.")
+        return
+    end
+    if not bagHighlight then
+        bagHighlight = CreateBagHighlight()
+    end
+    reviewFrame:Hide()
+    bagHighlight:SetParent(button)
+    bagHighlight:ClearAllPoints()
+    bagHighlight:SetAllPoints(button)
+    bagHighlight:SetFrameStrata(button:GetFrameStrata())
+    bagHighlight:SetFrameLevel(button:GetFrameLevel() + 1)
+    bagHighlight.stack, bagHighlight.remaining, bagHighlight.nextIdentityCheck = stack, 3, 3
+    bagHighlight:Show()
+end
+
 local function HideItemTooltip(icon)
     if GameTooltip:GetOwner() == icon then
         GameTooltip:Hide()
@@ -379,14 +576,29 @@ local function CreateReviewRow(parent)
     row.details:SetWordWrap(false)
     row.details:SetTextColor(0.78, 0.73, 0.64)
 
+    row.destination = row:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    row.destination:SetPoint("TOPLEFT", 56, -43)
+    row.destination:SetPoint("TOPRIGHT", -110, -43)
+    row.destination:SetJustifyH("LEFT")
+    row.destination:SetWordWrap(false)
+    row.destination:SetTextColor(0.78, 0.73, 0.64)
+
+    row.find = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+    row.find:SetSize(96, 22)
+    row.find:SetPoint("TOPRIGHT", -8, -7)
+    row.find:SetText("Find in bags")
+    row.find:SetScript("OnClick", function()
+        FindInBags(row.snapshot)
+    end)
+
     row.protected = row:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
-    row.protected:SetPoint("RIGHT", -8, 0)
-    row.protected:SetWidth(90)
+    row.protected:SetPoint("RIGHT", -8, -13)
+    row.protected:SetWidth(96)
     row.protected:SetText("Protected")
 
     row.button = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-    row.button:SetSize(90, 22)
-    row.button:SetPoint("RIGHT", -8, 0)
+    row.button:SetSize(96, 22)
+    row.button:SetPoint("BOTTOMRIGHT", -8, 7)
     row.button:SetText("Delete...")
     row.button:SetScript("OnClick", function()
         namespace.RequestDeleteQuestItem(row.snapshot)
@@ -398,7 +610,19 @@ local function RefreshReview()
     if not reviewFrame or not reviewFrame:IsShown() then
         return
     end
-    local rows, reason = namespace.ScanQuestItems()
+    local items, reason = namespace.ScanQuestItems()
+    local currentZone, GetDestination = ReadZoneContext()
+    local filter = reviewFrame.zoneFilter
+    local zoneName = currentZone and currentZone.name
+    reviewFrame.playerZone:SetText(zoneName and ("Current zone: " .. zoneName) or "Current zone unavailable")
+    local rows = {}
+    for _, snapshot in ipairs(items) do
+        local scope, destinations = ReadItemZone(snapshot, currentZone, GetDestination)
+        if filter.key == "all" or filter.key == scope then
+            snapshot.destinations = destinations
+            rows[#rows + 1] = snapshot
+        end
+    end
     for _, heading in ipairs(reviewFrame.sections) do
         heading:Hide()
     end
@@ -439,6 +663,8 @@ local function RefreshReview()
             .. "  •  Qty " .. tostring(snapshot.count or "?")
             .. "  •  " .. bag .. ", slot " .. snapshot.slot
         row.details:SetText(details)
+        row.destination:SetText(snapshot.destinations and ("Quest destination: " .. snapshot.destinations)
+            or "Quest destination unknown")
         row.protected:SetShown(not status.mayDelete)
         row.button:SetShown(status.mayDelete)
         row.button:SetEnabled(allowed)
@@ -453,7 +679,17 @@ local function RefreshReview()
         row:Hide()
     end
     reviewFrame.contents:SetHeight(math.max(1, offset + 4))
-    reviewFrame.empty:SetText(reason or (#rows == 0 and "No quest-related items in your carried bags." or ""))
+    local empty = reason
+    if not empty and #rows == 0 then
+        if #items == 0 then
+            empty = "No quest-related items in your carried bags."
+        elseif not currentZone then
+            empty = "Your current zone could not be determined."
+        else
+            empty = filter.empty
+        end
+    end
+    reviewFrame.empty:SetText(empty or "")
 end
 
 local function CreateReview()
@@ -471,13 +707,39 @@ local function CreateReview()
     frame.TitleText:SetText("QuestTidy: Quest items")
     UISpecialFrames[#UISpecialFrames + 1] = "QuestTidyBagReview"
     local heading = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    heading:SetPoint("TOPLEFT", 16, -36)
+    heading:SetPoint("TOPLEFT", 16, -66)
     heading:SetWidth(614)
     heading:SetJustifyH("LEFT")
-    heading:SetText("Hover an icon for item details. Items marked Use unknown may still be needed for a quest.")
+    heading:SetText("Items with unknown destinations appear under All items. Review unknown quest use before deleting.")
     local scroll = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", 18, -65)
+    scroll:SetPoint("TOPLEFT", 18, -88)
     scroll:SetPoint("BOTTOMRIGHT", -36, 45)
+    frame.zoneFilter = zoneFilters[1]
+    local selected
+    for index, filter in ipairs(zoneFilters) do
+        local button = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+        button:SetSize(105, 22)
+        button:SetPoint("TOPLEFT", 16 + (index - 1) * 109, -34)
+        button:SetText(filter.label)
+        if frame.zoneFilter == filter then
+            button:LockHighlight()
+            selected = button
+        end
+        button:SetScript("OnClick", function(self)
+            if frame.zoneFilter ~= filter then
+                selected:UnlockHighlight()
+                self:LockHighlight()
+                selected, frame.zoneFilter = self, filter
+                scroll:SetVerticalScroll(0)
+                RefreshReview()
+            end
+        end)
+    end
+    frame.playerZone = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    frame.playerZone:SetPoint("TOPLEFT", 346, -40)
+    frame.playerZone:SetPoint("TOPRIGHT", -16, -40)
+    frame.playerZone:SetJustifyH("RIGHT")
+    frame.playerZone:SetWordWrap(false)
     local contents = CreateFrame("Frame", nil, scroll)
     contents:SetSize(listWidth, 1)
     scroll:SetScrollChild(contents)
@@ -509,8 +771,11 @@ function namespace.ReviewQuestItems()
     if not reviewFrame then
         reviewFrame = CreateReview()
     end
-    reviewFrame:Show()
-    RefreshReview()
+    if reviewFrame:IsShown() then
+        RefreshReview()
+    else
+        reviewFrame:Show()
+    end
     return true
 end
 
@@ -538,6 +803,11 @@ local events = CreateFrame("Frame")
 events:RegisterEvent("ADDON_LOADED")
 events:RegisterEvent("BAG_UPDATE_DELAYED")
 events:RegisterEvent("QUEST_LOG_UPDATE")
+events:RegisterEvent("QUEST_POI_UPDATE")
+events:RegisterEvent("PLAYER_ENTERING_WORLD")
+events:RegisterEvent("ZONE_CHANGED")
+events:RegisterEvent("ZONE_CHANGED_INDOORS")
+events:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 events:RegisterEvent("GET_ITEM_INFO_RECEIVED")
 events:RegisterEvent("PLAYER_REGEN_DISABLED")
 events:RegisterEvent("PLAYER_REGEN_ENABLED")
