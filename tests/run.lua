@@ -14,7 +14,7 @@ end
 local function setup(options)
 	options = options or {}
 	local state = { frames = {}, messages = {}, menus = {}, watches = {}, removed = {}, failed = {}, rows = {}, focus = 0,
-		quests = {}, ready = {}, added = {}, bagItems = {}, onQuest = {}, completed = {}, deleteCalls = {} }
+		quests = {}, objectives = {}, ready = {}, added = {}, bagItems = {}, onQuest = {}, completed = {}, deleteCalls = {} }
 	local methods = {}
 	local function region(parent, name)
 		local value = setmetatable({ parent = parent, name = name, scripts = {}, events = {}, points = {}, shown = true, enabled = true }, { __index = methods })
@@ -57,6 +57,8 @@ local function setup(options)
 	function methods:SetFormattedText(format, ...) self:SetText(string.format(format, ...)) end
 	function methods:CreateFontString(name) return region(self, name) end
 	function methods:CreateTexture(name) return region(self, name) end
+	function methods:SetTexture(texture) self.texture = texture end
+	function methods:SetHyperlink(link) self.hyperlink = link end
 	function methods:SetParent(parent) self.parent = parent end
 	function methods:GetParent() return self.parent end
 	function methods:GetName() return self.name end
@@ -82,7 +84,7 @@ local function setup(options)
 	function methods:SetFocus() self.focused = true end
 	function methods:ClearFocus() self.focused = false end
 	function methods:HighlightText() self.highlighted = true end
-	for _, method in ipairs({ "SetMovable", "EnableMouse", "RegisterForDrag", "SetClampedToScreen", "SetFrameStrata", "SetFrameLevel", "SetAutoFocus", "SetMultiLine", "SetFontObject", "SetJustifyH", "SetJustifyV", "SetTextInsets", "SetMaxLetters", "SetTextColor", "SetWordWrap", "SetNonSpaceWrap", "SetHyperlinksEnabled", "SetVerticalScroll", "SetAllPoints", "StartMoving", "StopMovingOrSizing", "SetHitRectInsets", "SetNormalFontObject", "SetDisabledFontObject", "SetBackdrop", "SetBackdropColor", "SetBackdropBorderColor", "SetResizable", "SetResizeBounds", "SetPropagateKeyboardInput" }) do
+	for _, method in ipairs({ "SetMovable", "EnableMouse", "RegisterForDrag", "SetClampedToScreen", "SetFrameStrata", "SetFrameLevel", "SetAutoFocus", "SetMultiLine", "SetFontObject", "SetJustifyH", "SetJustifyV", "SetTextInsets", "SetMaxLetters", "SetTextColor", "SetWordWrap", "SetNonSpaceWrap", "SetHyperlinksEnabled", "SetVerticalScroll", "SetAllPoints", "StartMoving", "StopMovingOrSizing", "SetHitRectInsets", "SetNormalFontObject", "SetDisabledFontObject", "SetBackdrop", "SetBackdropColor", "SetBackdropBorderColor", "SetResizable", "SetResizeBounds", "SetPropagateKeyboardInput", "SetColorTexture", "SetTexCoord", "SetVertexColor", "SetMaxLines" }) do
 		methods[method] = function() end
 	end
 	local env = setmetatable({}, { __index = _G })
@@ -109,7 +111,8 @@ local function setup(options)
 		return frame
 	end
 	env.GameTooltip = region()
-	env.GameTooltip.SetOwner = function() end
+	env.GameTooltip.SetOwner = function(self, owner) self.owner = owner end
+	env.GameTooltip.GetOwner = function(self) return self.owner end
 	env.GameTooltip.AddLine = function() end
 	env.QuestUtil = { CanRemoveQuestWatch = function() return not state.restricted end }
 	env.Constants = { QuestWatchConsts = { MAX_QUEST_WATCHES = 40 } }
@@ -136,7 +139,11 @@ local function setup(options)
 		header.isCollapsed = true
 	end
 	env.C_QuestLog = {
-		GetNumQuestLogEntries = function() return #visibleQuests() end,
+		GetNumQuestLogEntries = function()
+			local count = 0
+			for _, info in ipairs(state.quests) do if not info.isHeader then count = count + 1 end end
+			return #visibleQuests(), count
+		end,
 		GetInfo = function(index)
 			local info = visibleQuests()[index]
 			if not info then return nil end
@@ -146,6 +153,7 @@ local function setup(options)
 			return copy
 		end,
 		ReadyForTurnIn = function(id) return state.ready[id] end,
+		GetQuestObjectives = function(id) return state.objectives[id] or {} end,
 		IsComplete = function() return false end,
 		IsQuestDisabledForSession = function(id) return state.disabledQuest == id end,
 		GetQuestWatchType = function(id)
@@ -173,7 +181,10 @@ local function setup(options)
 			end
 			return false
 		end,
-		GetTitleForQuestID = function(id) return id == 1456 and "The Karnitol Shipwreck" or "Another quest" end,
+		GetTitleForQuestID = function(id)
+			for _, quest in ipairs(state.quests) do if quest.questID == id then return quest.title end end
+			return id == 1456 and "The Karnitol Shipwreck" or "Another quest"
+		end,
 		GetLogIndexForQuestID = function(id) return state.rows[id] and 1 or nil end,
 	}
 	env.C_SuperTrack = {
@@ -229,7 +240,7 @@ local function setup(options)
 		GetItemInfoInstant = function(id)
 			for _, items in pairs(state.bagItems) do
 				for _, item in pairs(items) do
-					if item.itemID == id and not item.uncached then return id, "Quest", "Quest", "", 0, item.classID or 12, 0 end
+					if item.itemID == id and not item.uncached then return id, "Quest", "Quest", "", item.fallbackIcon, item.classID or 12, 0 end
 				end
 			end
 		end,
@@ -587,6 +598,27 @@ test("bag scan includes carried reagent bag and excludes bank", function()
 	equal(#s.ns.ScanQuestItems(), 2, "carried quest items only")
 end)
 
+test("bag review puts quest items first and shows their inventory icons", function()
+	local s = setup()
+	putItem(s, 0, 1, { classID = 7, questInfo = { isQuestItem = false, isActive = false, questID = 91 } })
+	local venom = putItem(s, 0, 5, { iconFileID = 134015, fallbackIcon = 134016,
+		hyperlink = "|Hitem:1005|h[Scorpashi Venom]|h", questInfo = { isQuestItem = false, isActive = false } })
+	putItem(s, 1, 1, { classID = 7, fallbackIcon = 134017, questInfo = { isQuestItem = true, isActive = true } })
+	local rows = s.ns.ScanQuestItems()
+	equal(#rows, 3, "three visible items")
+	equal(rows[1].bag, 1, "known active quest item first")
+	equal(rows[2].itemID, venom.itemID, "quest-class item before earlier quest starter")
+	equal(rows[3].slot, 1, "other quest-related item last")
+	assert(s.ns.ReviewQuestItems(), "review opens")
+	local textures = {}
+	for _, region in ipairs(s.frames) do
+		if region.texture and region:IsVisible() then textures[region.texture] = true end
+	end
+	assert(textures[134015], "inventory icon is displayed")
+	assert(textures[134017], "item API icon is displayed when inventory icon is missing")
+	assert(not textures[134016], "inventory icon takes precedence")
+end)
+
 test("all quest starters remain protected including completed ones", function()
 	local s = setup()
 	putItem(s, 0, 1, { questInfo = { isQuestItem = true, isActive = false, questID = 90 } })
@@ -595,6 +627,86 @@ test("all quest starters remain protected including completed ones", function()
 	equal(row.status, "starts_quest", "completed starter status")
 	equal(s.ns.RequestDeleteQuestItem(row), false, "starter deletion rejected")
 	equal(s.popup, nil, "no delete confirmation")
+end)
+
+test("active quest objectives protect bag items without a bag quest ID", function()
+	local s = setup()
+	s.quests = { { questID = 1459, title = "Reagents for Reclaimers Inc." } }
+	s.onQuest[1459] = true
+	s.objectives[1459] = { { type = "item", text = "5/7 Scorpashi Venom" },
+		{ type = "item", text = "Aged Kodo Hide: 3/3", finished = true } }
+	putItem(s, 0, 1, { itemID = 6248, hyperlink = "|Hitem:6248|h[Scorpashi Venom]|h" })
+	putItem(s, 0, 2, { itemID = 6249, hyperlink = "|Hitem:6249|h[Aged Kodo Hide]|h" })
+	for _, row in ipairs(s.ns.ScanQuestItems()) do
+		equal(row.status, "active", row.name .. " must be active")
+		equal(s.ns.RequestDeleteQuestItem(row), false, "active objective item cannot open delete confirmation")
+	end
+	assert(s.ns.ReviewQuestItems())
+	assert(s:hasText("Reagents for Reclaimers Inc."), "bag review shows the quest name")
+	assert(not s.popup, "no deletion confirmation")
+end)
+
+test("a collapsed untracked Reagents quest still protects its objective item IDs", function()
+	local s = setup()
+	s.quests = { { isHeader = true, isCollapsed = true }, { questID = 1459, title = "Reagents for Reclaimers Inc." } }
+	s.onQuest[1459] = true
+	putItem(s, 0, 1, { itemID = 6248 })
+	local row = s.ns.ScanQuestItems()[1]
+	equal(row.questID, 1459, "matched verified quest ID")
+	equal(row.status, "active", "protected without a visible quest entry")
+	equal(s.quests[1].isCollapsed, true, "header preserved")
+	s.onQuest[1459] = false
+	equal(s.ns.ScanQuestItems()[1].status, "unknown", "verified link is conditional on an active quest")
+end)
+
+test("item objectives match whole names or exact item IDs, including completed objectives", function()
+	local s = setup()
+	s.quests = { { questID = 101, title = "Collection quest" } }
+	s.onQuest[101] = true
+	s.objectives[101] = {
+		{ type = "item", text = "3/3 Gathered Herb (Complete)", finished = true },
+		{ type = "item", text = "2/5 |Hitem:1002|h[Shared Label]|h" },
+		{ type = "monster", text = "1/2 Creature" },
+		{ type = "item", text = "Extra Reagent 2/5" },
+	}
+	local labels = { "Gathered Herb", "Shared Label", "Shared Label", "Creature", "Herb", "Extra Reagent" }
+	for slot, label in ipairs(labels) do
+		putItem(s, 0, slot, { hyperlink = "|Hitem:" .. (1000 + slot) .. "|h[" .. label .. "]|h" })
+	end
+	for _, row in ipairs(s.ns.ScanQuestItems()) do
+		local expected = (row.slot <= 2 or row.slot == 6) and "active" or "unknown"
+		equal(row.status, expected, "objective match for slot " .. row.slot)
+	end
+end)
+
+test("an uninspected active quest blocks unknown deletion", function()
+	local s = setup()
+	s.quests = { { isHeader = true, isCollapsed = true }, { questID = 101, title = "Hidden quest" } }
+	s.onQuest[101] = true
+	putItem(s, 0, 1)
+	local row = s.ns.ScanQuestItems()[1]
+	equal(s.ns.RequestDeleteQuestItem(row), false, "inspection could not cover the full log")
+	assert(not s.popup, "no confirmation on incomplete inspection")
+end)
+
+test("accepting a quest after opening confirmation prevents deletion", function()
+	local s, item, row = unknownItem()
+	assert(s.ns.RequestDeleteQuestItem(row), "confirmation opened before accepting quest")
+	s.quests = { { questID = 101, title = "New quest" } }
+	s.onQuest[101] = true
+	s.objectives[101] = { { type = "item", text = "2/2 Quest item", finished = true } }
+	s:confirm()
+	equal(#s.deleteCalls, 0, "fresh active objective blocks deletion")
+	equal(s.bagItems[0][1], item, "original item still in bag")
+end)
+
+test("a partial objective response blocks unknown deletion", function()
+	local s, _, row = unknownItem()
+	s.quests = { { questID = 101, title = "Partial quest" } }
+	s.onQuest[101] = true
+	s.env.C_QuestLog.GetNumQuestObjectives = function() return 1 end
+	equal(s.ns.RequestDeleteQuestItem(row), false, "objective table omitted a reported objective")
+	assert(not s.popup, "no confirmation until objective data is available")
 end)
 
 test("client active flag and active quest ID both protect items", function()
